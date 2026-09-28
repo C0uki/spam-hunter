@@ -1,0 +1,38 @@
+[project]
+name = "spam-hunter"
+version = "0.1.0"
+description = "Twitch チャットを記録し、Laya による荒らし判定の精度を評価するツール"
+requires-python = ">=3.12"
+dependencies = [
+  "websockets>=15",
+  "python-dotenv>=1.0",
+  "pyyaml>=6",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# Laya の判定（M2）。torch と onnxruntime を含むので重い
+judge = [
+  "laya[onnx]==0.3.21",
+  "torch>=2.0",
+  "psutil>=5",
+]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = [
+  "slow: 本物の Laya を使う、時間のかかるテスト（python -m pytest -m slow で実行）",
+]
