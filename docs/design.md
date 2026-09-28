@@ -152,7 +152,8 @@ Twitch のライブ配信チャットを記録し、Laya（非自己回帰型の
 | 連投 | 同じ投稿者が、同じ内容（正規化後）を **60秒以内に3回以上** 書いたら「連投」にする |
 | URL 投稿 | URL を含むコメントに印を付ける |
 
-- 正規化の内容：全角・半角の統一（NFKC）、空白の除去、同じ文字が並んだ部分の圧縮（例：「wwwww」→「ww」）
+- 正規化の内容：全角・半角の統一（NFKC）、小文字化、空白の除去、同じ文字が3文字以上並んだ部分を2文字に圧縮（例：「wwwww」→「ww」）
+- URL は、`http(s)://`・`www.` で始まるものに加え、`bit.ly/xxx` や `discord.gg/xxx` のような、よく使われるトップレベルドメインで終わるドメインも拾います（全角で書かれたものも NFKC で拾う）
 - 投稿者の区別は、監視中のメモリ上でだけ行います。
 - ルールの印は、**Discord にリアルタイムで通知**します（§4.9）。
 
@@ -335,8 +336,8 @@ CREATE TABLE sessions (
   started_at      TEXT NOT NULL,
   ended_at        TEXT,
   end_reason      TEXT,                   -- 'manual' | 'offline' | 'error'
-  pipeline_status TEXT NOT NULL,          -- 'recording' | 'judging' | 'paused' | 'sampling' | 'done' | 'error'
-  primary_variant TEXT NOT NULL           -- このセッションの判定・抽出に使った variant
+  pipeline_status TEXT NOT NULL,          -- 'recording' | 'ended' | 'judging' | 'paused' | 'sampling' | 'done' | 'error'
+  primary_variant TEXT                    -- このセッションの判定・抽出に使った variant（判定を始めるときに入れる）
 );
 
 -- 配信状況の履歴（変わるたびに1行足す）
@@ -424,6 +425,9 @@ CREATE TABLE settings (
 );
 ```
 
+- `pipeline_status` は、監視中が `recording`、監視が終わって判定待ちが `ended` です。判定のバッチ処理は `ended` のセッションを拾います。
+- 起動したときに、前回の異常終了で開いたままのセッションがあれば、`end_reason = 'error'` で閉じます（終了時刻は最後のメッセージの時刻）。
+- メッセージの重複（再接続したときに同じメッセージ ID が届くなど）は無視します。通し番号（`seq`）がぶつかった場合はエラーにします。
 - 選ばれた確率 π は保存せず、`label_queue` と `sample_draws` から計算します（層の定義を変えても、過去の分を正しく扱えるようにするため）。
 
 ---

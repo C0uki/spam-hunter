@@ -1,0 +1,29 @@
+[project]
+name = "spam-hunter"
+version = "0.1.0"
+description = "Twitch チャットを記録し、Laya による荒らし判定の精度を評価するツール"
+requires-python = ">=3.12"
+dependencies = [
+  "websockets>=15",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "slow: 本物の Laya など、時間のかかるテスト",
+]

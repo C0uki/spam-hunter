@@ -1,0 +1,17 @@
+# 秘密情報とデータ（docs/design.md §8）
+.env
+data/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
