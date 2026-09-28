@@ -1,0 +1,33 @@
+# 初期値（docs/design.md）。M4 以降は、画面で変えた値（settings テーブル）がこれより優先される。
+
+rules:                       # §4.4
+  repeat_window_sec: 60      # 連投とみなす時間
+  repeat_min_count: 3        # 連投とみなす回数
+  url_enabled: true
+
+helix:                       # §4.3
+  poll_interval_sec: 300     # 配信状況を取りに行く間隔
+  offline_checks_to_end: 2   # 何回続けて「配信していない」ならセッションを終えるか
+
+notify:                      # §4.9
+  rule_realtime: true        # ルールの印をリアルタイムで通知する
+  rule_author_cooldown_sec: 300  # 同じ投稿者の2回目以降は、この間隔でまとめて通知する
+  session_summary: true      # セッション後のまとめを通知する
+
+judge:                       # §4.5（M2 の測定では、CPU ではバッチ1が最速だった）
+  batch_size: 1
+  threads: 2
+
+sampling:                    # §4.6 層別抽出（1セッションあたりの件数）
+  random: 30
+  noul_bands:                # noul の各項目について、P(true) の帯ごとに抽出する
+    - {name: high, min: 0.9, max: 1.01, n: 4}
+    - {name: mid,  min: 0.7, max: 0.9,  n: 3}
+    - {name: low,  min: 0.5, max: 0.7,  n: 3}
+  choice:                    # choice の項目について、選ばれた段階ごとに抽出する
+    severity: {severe: 5, caution: 5}
+
+policy:                      # §4.8 しきい値のポリシー（まとめ通知の件数と、統計のシミュレーションに使う）
+  choice_notify: {severity: [severe]}
+  noul_items: [abuse, personal_attack, spam_promo, sexual]
+  noul_threshold: 0.9

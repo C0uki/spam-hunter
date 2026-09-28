@@ -50,6 +50,7 @@ class ChannelMonitor:
         self.session_id: int | None = None
         self.recorded = 0
         self.duplicates = 0
+        self.stop_reason: str | None = None
 
     def start(self, purpose: str, context: StreamContext) -> int:
         self.session_id = self.db.start_session(self.source.channel, purpose, context)
@@ -83,7 +84,8 @@ class ChannelMonitor:
                 seq += 1
             reason = "offline"  # 受信元が終わった（テストの偽の受信元など）
         except (asyncio.CancelledError, KeyboardInterrupt):
-            reason = "manual"
+            # 配信の終了を検知して止めたときは 'offline'、それ以外（Ctrl+C など）は 'manual'
+            reason = self.stop_reason or "manual"
             raise
         finally:
             self.db.end_session(self.session_id, reason)
@@ -94,3 +96,18 @@ class ChannelMonitor:
                 self.recorded,
                 self.duplicates,
             )
+
+
+def apply_stream_info(db: Database, session_id: int, game_name: str | None, title: str | None) -> None:
+    """Helix で取った配信状況を、手入力の値（指示を歓迎しているか・ネタバレ注意メモ）を引き継いで記録する。"""
+    latest = db.latest_context(session_id)
+    db.add_context(
+        session_id,
+        StreamContext(
+            welcomes_advice=latest["welcomes_advice"] if latest else "unknown",
+            game_name=game_name,
+            stream_title=title,
+            spoiler_note=latest["spoiler_note"] if latest else None,
+        ),
+        source="helix",
+    )

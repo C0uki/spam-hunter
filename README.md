@@ -3,7 +3,7 @@
 Twitch のライブ配信チャットを記録し、[Laya](https://github.com/NandhaKishorM/laya) による荒らし判定が日本語の配信チャットでどのくらい当たるかを評価するツールです。
 
 - 設計書: [`docs/design.md`](docs/design.md)（第2版）／ 元の設計書: [`docs/design-v1.md`](docs/design-v1.md)
-- 進み具合: **M2（Laya のバッチ判定と性能測定）** まで実装済み
+- 進み具合: **M3（セッション後の流れと通知）** まで実装済み
 
 ## セットアップ
 
@@ -31,7 +31,14 @@ Laya で判定する（M2）には、判定用の依存パッケージも入れ�
 pip install -e ".[judge,dev]"
 ```
 
-必要なら、リポジトリ直下で `.env.example` を `.env` にコピーして値を入れます（M2 までは、どれも入れなくても動きます）。
+リポジトリ直下で `.env.example` を `.env` にコピーして、使う機能の値を入れます（どれも入れなくても、監視と判定は動きます）。
+
+| 値 | 入れると使える機能 | 取り方 |
+|---|---|---|
+| `TWITCH_CLIENT_ID`・`TWITCH_CLIENT_SECRET` | 配信状況（ゲーム名・タイトル）の自動取得、配信が終わったら自動で監視を止める | Twitch の開発者コンソール（dev.twitch.tv）でアプリを登録する |
+| `DISCORD_WEBHOOK_URL` | ルールの印のリアルタイム通知、セッション後のまとめ通知 | Discord のチャンネルの設定 →「連携サービス」→「ウェブフック」で作る |
+
+`.env` は Git に入らないようになっています。中身を人に送ったり、画面に映したりしないでください。
 
 ## 使い方（M1: ターミナルで監視する）
 
@@ -61,19 +68,25 @@ python -m app.cli monitor <チャンネル名> --purpose story_firstplay --welco
 | `--repeat-window`・`--repeat-count` | 連投とみなす秒数と回数（既定は60秒・3回） |
 | `--db` | SQLite のパス |
 | `--quiet` | コメントを表示しない |
+| `--no-pipeline` | 監視を止めたあと、判定に進まない |
+| `--no-notify` | Discord に通知しない |
 
-## 使い方（M2: 判定する）
+- 監視を止める（Ctrl+C、または配信の終了を自動で検知）と、そのまま「判定 → 層別抽出 → まとめ通知」に進みます。進ませたくないときは `--no-pipeline` を付けます。
+- 連投と URL の印は、Discord にすぐ通知されます。同じ投稿者の2回目以降は、5分ごとに件数をまとめて通知します。
 
-監視が終わったセッションを、`config/questions.yaml` の本番の variant（`primary`）で判定します。`backend/` で実行します。
+## 使い方（判定・抽出・まとめ通知）
+
+監視が終わったセッションを、`config/questions.yaml` の本番の variant（`primary`）で判定し、採点キューへの抽出とまとめ通知まで進めます。`backend/` で実行します。
 
 ```bash
-python -m app.cli judge                     # 判定待ちのセッションをすべて判定する
-python -m app.cli judge --session 3         # セッションを指定する
-python -m app.cli judge --batch-size 4 --threads 2
+python -m app.cli pipeline                  # 待っているセッションをすべて進める（途中で止めたものの続きも含む）
+python -m app.cli pipeline --session 3      # セッションを指定する
+python -m app.cli judge                     # 判定だけを行う（抽出と通知はしない）
 ```
 
 - 初回は Laya の多言語用モデル（約650MB）をダウンロードします。
-- 1回目の Ctrl+C で、いまのバッチを終えてから止まります。もう一度 `judge` を実行すると、続きから判定します。
+- 1回目の Ctrl+C で、いまのバッチを終えてから止まります。もう一度 `pipeline` を実行すると、続きから進みます。
+- 抽出の件数、通知の設定、ルールの値などの初期値は `config/defaults.yaml` にあります。
 - 質問の文言と variant は `config/questions.yaml` で変えられます。評価期間中は、本番の variant（`primary`）を変えないでください。
 
 ### ONNX 版を使う・比べる

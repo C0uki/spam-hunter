@@ -100,6 +100,10 @@ MIGRATIONS: list[str] = [
       value  TEXT NOT NULL
     );
     """,
+    # v2: 層の定義を保存する（選ばれた確率 π を、母集団に含まれる層すべてから計算するため。§4.6）
+    """
+    ALTER TABLE sample_draws ADD COLUMN definition TEXT NOT NULL DEFAULT '{}';
+    """,
 ]
 
 

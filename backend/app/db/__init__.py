@@ -262,3 +262,81 @@ class Database:
                 self.conn.executemany(
                     "UPDATE messages SET judge_status = 'error' WHERE id = ?", [(i,) for i in error_ids]
                 )
+
+    # --- context / notifications ----------------------------------------------
+
+    def latest_context(self, session_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM session_context WHERE session_id = ? ORDER BY valid_from DESC, id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+
+    def mark_rule_notified(self, message_id: str) -> None:
+        with self.conn:
+            self.conn.execute("UPDATE messages SET rule_notified = 1 WHERE id = ?", (message_id,))
+
+    # --- sampling ---------------------------------------------------------------
+
+    def has_draws(self, session_id: int, variant: str) -> bool:
+        return (
+            self.conn.execute(
+                "SELECT 1 FROM sample_draws WHERE session_id = ? AND variant = ? LIMIT 1",
+                (session_id, variant),
+            ).fetchone()
+            is not None
+        )
+
+    def session_judgments(self, session_id: int, variant: str) -> list[sqlite3.Row]:
+        """判定済み（done）のメッセージの、その variant の判定結果。"""
+        return self.conn.execute(
+            "SELECT j.message_id, j.question_id, j.value FROM judgments j"
+            " JOIN messages m ON m.id = j.message_id"
+            " WHERE m.session_id = ? AND m.judge_status = 'done' AND j.variant = ?",
+            (session_id, variant),
+        ).fetchall()
+
+    def save_draws(self, session_id: int, variant: str, draws: list[dict]) -> None:
+        """draws: {stratum, definition(dict), population_size, message_ids} のリスト。1つのトランザクションで保存する。"""
+        drawn_at = iso(utcnow())
+        with self.conn:
+            for d in draws:
+                cur = self.conn.execute(
+                    "INSERT INTO sample_draws"
+                    " (session_id, variant, stratum, population_size, draw_size, drawn_at, definition)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        session_id,
+                        variant,
+                        d["stratum"],
+                        d["population_size"],
+                        len(d["message_ids"]),
+                        drawn_at,
+                        json.dumps(d["definition"], ensure_ascii=False),
+                    ),
+                )
+                self.conn.executemany(
+                    "INSERT INTO label_queue (message_id, draw_id) VALUES (?, ?)",
+                    [(mid, cur.lastrowid) for mid in d["message_ids"]],
+                )
+
+    def session_summary_counts(self, session_id: int) -> dict[str, int]:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS received,"
+            " SUM(rule_flags IS NOT NULL) AS rule_flagged,"
+            " SUM(judge_status = 'done') AS judged,"
+            " SUM(judge_status = 'error') AS judge_errors"
+            " FROM messages WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        queued = self.conn.execute(
+            "SELECT COUNT(DISTINCT q.message_id) FROM label_queue q"
+            " JOIN sample_draws d ON d.id = q.draw_id WHERE d.session_id = ?",
+            (session_id,),
+        ).fetchone()[0]
+        return {
+            "received": row["received"] or 0,
+            "rule_flagged": row["rule_flagged"] or 0,
+            "judged": row["judged"] or 0,
+            "judge_errors": row["judge_errors"] or 0,
+            "queued": queued,
+        }
