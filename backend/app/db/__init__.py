@@ -160,3 +160,105 @@ class Database:
                 ),
             )
         return cur.rowcount == 1
+
+    # --- judging ------------------------------------------------------------
+
+    def set_pipeline_status(self, session_id: int, status: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "UPDATE sessions SET pipeline_status = ? WHERE id = ?", (status, session_id)
+            )
+
+    def claim_primary_variant(self, session_id: int, variant: str) -> None:
+        """セッションの本番 variant を決める。すでに別の variant で判定を始めていればエラー。"""
+        with self.conn:
+            self.conn.execute(
+                "UPDATE sessions SET primary_variant = ? WHERE id = ? AND primary_variant IS NULL",
+                (variant, session_id),
+            )
+        current = self.get_session(session_id)["primary_variant"]
+        if current != variant:
+            raise ValueError(
+                f"session {session_id} is already being judged with variant {current!r}, not {variant!r}"
+            )
+
+    def sessions_to_judge(self) -> list[int]:
+        """監視が終わって判定が済んでいない（途中で止まったものを含む）セッション。"""
+        rows = self.conn.execute(
+            "SELECT id FROM sessions WHERE pipeline_status IN ('ended', 'judging', 'paused')"
+            " ORDER BY id"
+        ).fetchall()
+        return [r["id"] for r in rows]
+
+    def count_pending(self, session_id: int) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ? AND judge_status = 'pending'",
+            (session_id,),
+        ).fetchone()[0]
+
+    def pending_messages(self, session_id: int, limit: int) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT id, session_id, text, sent_at FROM messages"
+            " WHERE session_id = ? AND judge_status = 'pending'"
+            " ORDER BY sent_at, seq LIMIT ?",
+            (session_id, limit),
+        ).fetchall()
+
+    def messages_by_id(self, message_ids: list[str]) -> list[sqlite3.Row]:
+        if not message_ids:
+            return []
+        marks = ",".join("?" * len(message_ids))
+        rows = self.conn.execute(
+            f"SELECT id, session_id, text, sent_at FROM messages WHERE id IN ({marks})",
+            message_ids,
+        ).fetchall()
+        order = {mid: i for i, mid in enumerate(message_ids)}
+        return sorted(rows, key=lambda r: order[r["id"]])
+
+    def context_at(self, session_id: int, at: str) -> sqlite3.Row | None:
+        """そのセッションで、時刻 at の時点に有効だった配信状況（なければ最初のもの）。"""
+        row = self.conn.execute(
+            "SELECT * FROM session_context WHERE session_id = ? AND valid_from <= ?"
+            " ORDER BY valid_from DESC, id DESC LIMIT 1",
+            (session_id, at),
+        ).fetchone()
+        if row is None:
+            row = self.conn.execute(
+                "SELECT * FROM session_context WHERE session_id = ? ORDER BY valid_from, id LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return row
+
+    def save_judgments(
+        self,
+        rows: list[tuple],
+        *,
+        done_ids: list[str],
+        error_ids: list[str],
+        mark_status: bool,
+    ) -> None:
+        """判定結果を1つのトランザクションで保存する。
+
+        rows: (message_id, variant, question_id, value, probs_json, answer_confidence,
+               model_ver, latency_ms, judged_at)
+        mark_status: 本番の判定なら True（messages.judge_status を更新する）。
+        """
+        with self.conn:
+            self.conn.executemany(
+                "INSERT INTO judgments"
+                " (message_id, variant, question_id, value, probs, answer_confidence,"
+                "  model_ver, latency_ms, judged_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(message_id, variant, question_id) DO UPDATE SET"
+                "  value = excluded.value, probs = excluded.probs,"
+                "  answer_confidence = excluded.answer_confidence, model_ver = excluded.model_ver,"
+                "  latency_ms = excluded.latency_ms, judged_at = excluded.judged_at",
+                rows,
+            )
+            if mark_status:
+                self.conn.executemany(
+                    "UPDATE messages SET judge_status = 'done' WHERE id = ?", [(i,) for i in done_ids]
+                )
+                self.conn.executemany(
+                    "UPDATE messages SET judge_status = 'error' WHERE id = ?", [(i,) for i in error_ids]
+                )

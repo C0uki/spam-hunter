@@ -219,15 +219,23 @@ Twitch のライブ配信チャットを記録し、Laya（非自己回帰型の
 - ほかの variant は、**採点済みのメッセージだけ**を判定し直して比べます（§4.11）。
 
 #### 判定のバッチ処理
-- セッションが終わると自動で始まります。`judge_status = 'pending'` のメッセージを送信時刻の順に、`batch_size` 件ずつ（初期値8、設定で変更できる）`predict_batch(states, questions, sort_by_length=True)` で判定します。
-- 1バッチごとにコミットします。途中で止めても（一時停止、PC の再起動）、`pending` のものから再開できます。
-- ダッシュボードに、進み具合（判定済みの件数／全体、残りの見込み時間）と一時停止ボタンを表示します。
-- 判定に失敗したメッセージは `judge_status = 'error'` にし、エラーの内容をログに残します。
+- セッションが終わると自動で始まります（M3。M2 では `python -m app.cli judge` で手動で始める）。`judge_status = 'pending'` のメッセージを送信時刻の順に、`batch_size` 件ずつ（初期値8、設定で変更できる）`predict_batch(states, questions)` で判定します。
+  - `sort_by_length` は使いません。バッチの区切りは自前で決めていて、チャットのコメントは長さがそろっているため、効果がほぼないからです。
+- 1バッチごとにコミットします。途中で止めても（一時停止、Ctrl+C、PC の再起動）、`pending` のものから再開できます。
+- 判定を始めるときに、セッションの `primary_variant` を決めます。一度決めたら、そのセッションは別の variant では判定しません。
+- まとめて判定して失敗したら1件ずつ判定し直し、それでも失敗したメッセージは `judge_status = 'error'` にして、エラーの内容をログに残します。
+- 本文が消されたメッセージ（匿名化済み）は判定できないので、`error` として扱います。
+- ダッシュボードに、進み具合（判定済みの件数／全体、残りの見込み時間）と一時停止ボタンを表示します（M4）。
 - 1件あたりの判定時間（バッチの時間÷件数）を記録します。
-- 出力の対応【要確認：0.3.21 の実際の出力で確かめる】
-  - noul：`answers[q]["noul"]`（P(true)）
-  - choice：`answers[q]["choice"]`（選ばれたキー）と、選択肢ごとの確率
-  - 共通：`answers[q]["answer_confidence"]`
+- 出力の対応（0.3.21 で確認済み）
+  - noul：`answers[q]["noul"]`（P(true)）を `judgments.value` に保存します。
+  - choice：`answers[q]["choice"]`（選ばれたキー）を `value` に、`answers[q]["probabilities"]`（選択肢ごとの確率）を `probs` に保存します。
+  - 共通：`answers[q]["answer_confidence"]` を保存します。
+
+#### ONNX 版
+- Laya 本体の書き出しスクリプトは、多言語用モデル（`subfolder`）を指定できません。そのため、同じ手順の `backend/scripts/export_onnx.py` を用意しました。書き出したファイルは `backend/models/` に置きます（Git には入れない）。
+- `ONNXAgent` はスレッド数を指定できないので、読み込んだあとに、スレッド数を指定したセッションに作り直します。
+- INT8 版は、PyTorch 版と判定がかなり変わることがあります。そのため、速さだけで選ばず、採点データで比べてから使うかを決めます（§4.11 の variant の比較）。
 
 ### 4.6 層別抽出（採点キューへ）
 判定のバッチ処理が終わったら、そのセッションのメッセージから採点の候補を抽出します。
@@ -336,7 +344,7 @@ CREATE TABLE sessions (
   started_at      TEXT NOT NULL,
   ended_at        TEXT,
   end_reason      TEXT,                   -- 'manual' | 'offline' | 'error'
-  pipeline_status TEXT NOT NULL,          -- 'recording' | 'ended' | 'judging' | 'paused' | 'sampling' | 'done' | 'error'
+  pipeline_status TEXT NOT NULL,          -- 'recording' | 'ended' | 'judging' | 'paused' | 'judged' | 'sampling' | 'done' | 'error'
   primary_variant TEXT                    -- このセッションの判定・抽出に使った variant（判定を始めるときに入れる）
 );
 
@@ -425,7 +433,7 @@ CREATE TABLE settings (
 );
 ```
 
-- `pipeline_status` は、監視中が `recording`、監視が終わって判定待ちが `ended` です。判定のバッチ処理は `ended` のセッションを拾います。
+- `pipeline_status` の流れ：`recording`（監視中）→ `ended`（判定待ち）→ `judging`（判定中）→ `judged`（判定済み・抽出待ち）→ `sampling` → `done`。判定を途中で止めたら `paused` になり、次の判定で続きから再開します。判定のバッチ処理は `ended`・`judging`・`paused` のセッションを拾います（`judging` のままなのは、判定中にプロセスが落ちた場合）。
 - 起動したときに、前回の異常終了で開いたままのセッションがあれば、`end_reason = 'error'` で閉じます（終了時刻は最後のメッセージの時刻）。
 - メッセージの重複（再接続したときに同じメッセージ ID が届くなど）は無視します。通し番号（`seq`）がぶつかった場合はエラーにします。
 - 選ばれた確率 π は保存せず、`label_queue` と `sample_draws` から計算します（層の定義を変えても、過去の分を正しく扱えるようにするため）。

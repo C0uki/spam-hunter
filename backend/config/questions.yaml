@@ -1,0 +1,72 @@
+# Laya に聞く質問の定義（docs/design.md §4.5）
+#
+# - variant は「質問の文言」「labels」「バックエンド」の組。
+# - primary は本番の variant。評価期間中は変えない（全メッセージの判定と層別抽出に使う）。
+# - ほかの variant は、採点済みのメッセージだけを判定し直して比べるために使う。
+# - extends: 元にする variant。overrides: 質問ごとに上書きする項目。
+#   noul_labels: すべての noul 質問の labels を一括で指定する。
+# - backend: torch（PyTorch）／ onnx（fp32）／ onnx-int8
+
+primary: v1
+
+variants:
+  v1:
+    backend: torch
+    questions:
+      abuse:
+        type: noul
+        instructions: "このコメントは暴言や誹謗中傷を含みますか？"
+        criteria:
+          "false": "普通の感想・質問・雑談・冗談で、人をおとしめる言葉を含まない"
+          "true": "罵倒、侮辱、差別的な表現、誹謗中傷を含む"
+      personal_attack:
+        type: noul
+        instructions: "このコメントは、配信者や他の視聴者という特定の人への個人攻撃ですか？"
+        criteria:
+          "false": "特定の人を攻撃していない（ゲーム内の敵やキャラクターへの言葉、一般的な感想を含む）"
+          "true": "配信者や他の視聴者を名指し・返信などで狙い、けなしたり、嫌がらせをしたりしている"
+      spam_promo:
+        type: noul
+        instructions: "このコメントは宣伝やスパムですか？"
+        criteria:
+          "false": "配信の内容に関係する普通の発言"
+          "true": "他のチャンネル・サイト・商品・サービスへの誘導、フォロワー販売、無関係な宣伝、意味のない文字の大量投稿"
+      sexual:
+        type: noul
+        instructions: "このコメントは性的、またはわいせつで不適切な内容を含みますか？"
+        criteria:
+          "false": "性的な内容を含まない"
+          "true": "性的な表現、わいせつな話題、性的なからかいを含む"
+      spoiler:
+        type: noul
+        instructions: "このコメントは、配信中のゲーム（game）について、配信者がまだ見ていない先の展開をばらすネタバレですか？ spoiler_note に配信者の進み具合が書かれていれば参考にしてください。"
+        criteria:
+          "false": "ネタバレを含まない（すでに見た場面の話、ゲームに関係ない話、ぼかした感想）"
+          "true": "まだ見ていないストーリーの展開、結末、正体、今後の出来事をばらしている"
+      backseat:
+        type: noul
+        instructions: "このコメントは、頼まれていないのに配信者のゲームの進め方を指示するもの（指示厨）ですか？ streamer_welcomes_advice が「はい」なら、配信者は助言を歓迎しています。"
+        criteria:
+          "false": "指示をしていない、または配信者が助言を歓迎している・求めている"
+          "true": "頼まれていないのに、どこへ行け、何を使え、こうしろと進め方を指図している"
+      severity:
+        type: choice
+        instructions: "このコメントの、荒らしとしての深刻度はどれですか？"
+        criteria:
+          none: "問題なし。普通の感想・質問・雑談・応援"
+          caution: "注意。軽い暴言、軽いネタバレ、軽い指示厨、場の雰囲気を悪くする発言"
+          severe: "悪質。ひどい誹謗中傷、差別、性的な嫌がらせ、スパム、執拗な荒らし"
+
+  # issue #156（noul が選択肢の名前 false/true に引きずられる）への対策を試す
+  v1-labelsAB:
+    extends: v1
+    noul_labels: {"true": "A", "false": "B"}
+
+  # ONNX 版（M2 で速度と精度を比べる）
+  v1-onnx:
+    extends: v1
+    backend: onnx
+
+  v1-onnx-int8:
+    extends: v1
+    backend: onnx-int8

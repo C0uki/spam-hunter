@@ -3,7 +3,7 @@
 Twitch のライブ配信チャットを記録し、[Laya](https://github.com/NandhaKishorM/laya) による荒らし判定が日本語の配信チャットでどのくらい当たるかを評価するツールです。
 
 - 設計書: [`docs/design.md`](docs/design.md)（第2版）／ 元の設計書: [`docs/design-v1.md`](docs/design-v1.md)
-- 進み具合: **M1（受信・記録・ルール判定）** まで実装済み
+- 進み具合: **M2（Laya のバッチ判定と性能測定）** まで実装済み
 
 ## セットアップ
 
@@ -25,7 +25,13 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-必要なら、リポジトリ直下で `.env.example` を `.env` にコピーして値を入れます（M1 では、どれも入れなくても動きます）。
+Laya で判定する（M2）には、判定用の依存パッケージも入れます（torch などを含むので、数GB あります）。
+
+```bash
+pip install -e ".[judge,dev]"
+```
+
+必要なら、リポジトリ直下で `.env.example` を `.env` にコピーして値を入れます（M2 までは、どれも入れなくても動きます）。
 
 ## 使い方（M1: ターミナルで監視する）
 
@@ -56,6 +62,35 @@ python -m app.cli monitor <チャンネル名> --purpose story_firstplay --welco
 | `--db` | SQLite のパス |
 | `--quiet` | コメントを表示しない |
 
+## 使い方（M2: 判定する）
+
+監視が終わったセッションを、`config/questions.yaml` の本番の variant（`primary`）で判定します。`backend/` で実行します。
+
+```bash
+python -m app.cli judge                     # 判定待ちのセッションをすべて判定する
+python -m app.cli judge --session 3         # セッションを指定する
+python -m app.cli judge --batch-size 4 --threads 2
+```
+
+- 初回は Laya の多言語用モデル（約650MB）をダウンロードします。
+- 1回目の Ctrl+C で、いまのバッチを終えてから止まります。もう一度 `judge` を実行すると、続きから判定します。
+- 質問の文言と variant は `config/questions.yaml` で変えられます。評価期間中は、本番の variant（`primary`）を変えないでください。
+
+### ONNX 版を使う・比べる
+
+```bash
+python scripts/export_onnx.py      # backend/models/ に fp32 版と INT8 版を書き出す（合わせて約2.2GB）
+```
+
+### 処理速度を測る
+
+```bash
+python scripts/bench.py                                        # torch と onnx-int8、バッチ 1/4/8、2スレッド
+python scripts/bench.py --backends torch onnx onnx-int8 --json bench.json
+```
+
+1件あたりの判定時間（7項目）、1万件にかかる時間の見込み、PyTorch 版との判定の差が表示されます。測定には自作のサンプルのコメントを使います。
+
 ## テスト
 
 ```bash
@@ -63,4 +98,8 @@ cd backend
 python -m pytest
 ```
 
-テストはローカルの偽の IRC サーバーを使うので、Twitch には接続しません。
+テストはローカルの偽の IRC サーバーと偽の判定器を使うので、Twitch には接続せず、Laya のモデルも使いません。本物の Laya を使うテストは、次のように実行します（モデルのダウンロードが必要）。
+
+```bash
+python -m pytest -m slow
+```

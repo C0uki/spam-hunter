@@ -15,3 +15,6 @@ __pycache__/
 
 # Node
 node_modules/
+
+# 書き出した ONNX モデル（数百MB）
+backend/models/
