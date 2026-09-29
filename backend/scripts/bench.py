@@ -60,23 +60,36 @@ def rss_mb() -> float | None:
     return psutil.Process().memory_info().rss / 1e6
 
 
-def run_backend(kind, questions, states, batch_sizes, rounds, threads):
+def run_backend(kind, questions, states, batch_sizes, rounds, threads, *, need_answers=True):
     gc.collect()
     t0 = time.perf_counter()
     backend = load_backend(kind, threads=threads)
     load_s = time.perf_counter() - t0
+    print(f"  loaded in {load_s:.1f}s; warming up ...", flush=True)
     backend.predict(states[:2], questions)  # ウォームアップ
 
     timings = {}
     for bs in batch_sizes:
         per_round = []
-        for _ in range(rounds):
+        for r in range(rounds):
             t = time.perf_counter()
+            done = 0
             for i in range(0, len(states), bs):
                 backend.predict(states[i : i + bs], questions)
+                done += len(states[i : i + bs])
+                elapsed = time.perf_counter() - t
+                # 長い測定でも動いているのが分かるよう、途中経過を同じ行に書き直して表示する
+                print(
+                    f"\r  batch {bs}, round {r + 1}/{rounds}: {done}/{len(states)} 件"
+                    f"（{elapsed / done * 1000:.0f} ms/件）",
+                    end="",
+                    flush=True,
+                )
             per_round.append((time.perf_counter() - t) / len(states))
+            print(flush=True)
         timings[bs] = statistics.median(per_round)
-    answers = backend.predict(states[: len(SAMPLE_COMMENTS)], questions)
+    # PyTorch 版との判定の差を比べるときだけ、比較用の判定をする
+    answers = backend.predict(states[: len(SAMPLE_COMMENTS)], questions) if need_answers else None
     mem = rss_mb()
     backend.close()
     del backend
@@ -117,9 +130,12 @@ def main() -> None:
     print(f"# questions={len(questions)} ({variant.name}), messages={args.messages}, rounds={args.rounds}\n")
 
     results = {}
+    do_compare = "torch" in args.backends and len(args.backends) > 1
     for kind in args.backends:
         print(f"loading {kind} ...", flush=True)
-        results[kind] = run_backend(kind, questions, states, args.batch_sizes, args.rounds, args.threads)
+        results[kind] = run_backend(
+            kind, questions, states, args.batch_sizes, args.rounds, args.threads, need_answers=do_compare
+        )
 
     print("\n## 1件あたりの判定時間（7項目）")
     header = "| backend | 読み込み(秒) | メモリ(MB)※ | " + " | ".join(f"batch {b}" for b in args.batch_sizes) + " |"
@@ -141,8 +157,9 @@ def main() -> None:
         print(f"- {kind}: 約{r['sec_per_msg'][best_b] * 10000 / 3600:.1f} 時間（batch {best_b}）")
 
     report = {"results": {}, "agreement_vs_torch": {}}
-    if "torch" in results:
-        print("\n## PyTorch 版との判定の差（サンプル40件）")
+    if do_compare:
+        n = len(results["torch"]["answers"])
+        print(f"\n## PyTorch 版との判定の差（サンプル{n}件）")
         for kind, r in results.items():
             if kind == "torch":
                 continue
