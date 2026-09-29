@@ -132,15 +132,35 @@ async def test_idle_timeout_triggers_reconnect(fake_server):
     assert fake.connections == 2
 
 
-async def test_unreachable_server_keeps_retrying():
+async def test_broken_server_keeps_retrying():
+    # 接続を受け付けてすぐ切るサーバー。閉じたポートへの接続は、Windows では断られるまで約2秒かかり、
+    # テストが OS によって不安定になるため、どの OS でもすぐに失敗するこの形で確かめる
+    async def slam(reader, writer):
+        writer.close()
+
+    server = await asyncio.start_server(slam, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
     statuses = []
     client = TwitchChatClient(
-        "testchan", url="ws://127.0.0.1:9", proxy=None, backoff_initial=0.01, backoff_max=0.02,
+        "testchan", url=f"ws://127.0.0.1:{port}", proxy=None, backoff_initial=0.01, backoff_max=0.02,
         on_status=statuses.append,
     )
-    with pytest.raises(TimeoutError):
-        await collect(client, 1, timeout=0.5)
+
+    async def until_three_retries():
+        async for _ in client.messages():
+            pass
+
+    task = asyncio.create_task(until_three_retries())
+    try:
+        for _ in range(500):
+            if sum(s.startswith("reconnecting in") for s in statuses) >= 3:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        server.close()
     assert sum(s.startswith("reconnecting in") for s in statuses) >= 3
+    assert any(s.startswith("connection lost") for s in statuses)
 
 
 async def test_monitor_records_to_db(fake_server, tmp_path):
