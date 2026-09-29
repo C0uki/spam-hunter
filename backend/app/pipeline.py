@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -20,6 +21,22 @@ log = logging.getLogger(__name__)
 
 PENDING_STATUSES = ("ended", "judging", "paused", "judged", "sampling")
 JUDGE_STATUSES = ("ended", "judging", "paused")
+
+
+def max_messages_per_session(defaults: dict[str, Any]) -> int | None:
+    """defaults.yaml の judge.max_messages_per_session。空・0 以下なら上限なし。"""
+    value = defaults.get("judge", {}).get("max_messages_per_session")
+    if value in (None, "", "none"):
+        return None
+    value = int(value)
+    return value if value > 0 else None
+
+
+def resolve_threads(value: Any) -> int:
+    """judge.threads。'auto' や空なら、CPU の論理スレッド数（Surface Go 2 なら4）を使う。"""
+    if value in (None, "", "auto"):
+        return os.cpu_count() or 2
+    return max(1, int(value))
 
 
 def sessions_for_pipeline(db: Database) -> list[int]:
@@ -98,6 +115,7 @@ def run_pipeline(
                 variant,
                 backend,
                 batch_size=int(defaults.get("judge", {}).get("batch_size", 1)),
+                max_messages=max_messages_per_session(defaults),
                 should_stop=should_stop,
                 on_progress=on_progress,
             )

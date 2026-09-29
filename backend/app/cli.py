@@ -236,7 +236,7 @@ def _run_pipelines(
     from .judge.backends import load_backend
     from .judge.runner import Progress, judge_session
     from .judge.variants import load_questions
-    from .pipeline import run_pipeline
+    from .pipeline import max_messages_per_session, resolve_threads, run_pipeline
 
     config = load_questions()
     variant = config.get(getattr(args, "variant", None))
@@ -245,7 +245,7 @@ def _run_pipelines(
     judge_cfg = dict(defaults.get("judge", {}))
     if getattr(args, "batch_size", None):
         judge_cfg["batch_size"] = args.batch_size
-    threads = getattr(args, "threads", None) or int(judge_cfg.get("threads", 2))
+    threads = getattr(args, "threads", None) or resolve_threads(judge_cfg.get("threads"))
     run_defaults = {**defaults, "judge": judge_cfg}
 
     backend_holder: dict[str, Any] = {}
@@ -284,6 +284,7 @@ def _run_pipelines(
                     variant,
                     backend_factory(),
                     batch_size=int(judge_cfg.get("batch_size", 1)),
+                    max_messages=max_messages_per_session(run_defaults),
                     should_stop=lambda: stop["requested"],
                     on_progress=report,
                 )

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..db import Database, iso, utcnow
+from ..sampling import subsample_for_judging
 from .backends import Backend
 from .variants import Variant
 
@@ -163,11 +164,13 @@ def judge_session(
     backend: Backend,
     *,
     batch_size: int = 8,
+    max_messages: int | None = None,
     should_stop: Callable[[], bool] = lambda: False,
     on_progress: Callable[[Progress], None] | None = None,
 ) -> Progress:
     """セッションの pending を判定する。should_stop() が True になったら、いまのバッチを終えてから止める。
 
+    max_messages: 1セッションで判定する件数の上限。超えたら、ランダムに選んだ分だけを判定する（選ぶのは初回だけ）。
     戻り値の remaining が 0 なら判定済み（pipeline_status = 'judged'）、残っていれば 'paused'。
     """
     if batch_size < 1:
@@ -180,6 +183,9 @@ def judge_session(
     if variant.backend != backend.kind:
         raise ValueError(f"variant {variant.name!r} needs backend {variant.backend!r}, got {backend.kind!r}")
     db.claim_primary_variant(session_id, variant.name)
+    population, sample = subsample_for_judging(db, session_id, max_messages)
+    if sample < population:
+        log.info("session %d: judging %d of %d messages (limit per session)", session_id, sample, population)
     db.set_pipeline_status(session_id, "judging")
 
     progress = Progress(session_id, 0, 0, db.count_pending(session_id), 0.0)
