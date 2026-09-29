@@ -104,11 +104,53 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE sample_draws ADD COLUMN definition TEXT NOT NULL DEFAULT '{}';
     """,
+    # v3: 1セッションで判定する件数の上限（Q20）。上限を超えたセッションは、ランダムに選んだ分だけ判定し、
+    #     選ばれなかったメッセージは judge_status = 'skipped' にする。CHECK 制約を変えるため messages を作り直す
+    #     （SQLite の手順どおり。外部キーの確認は migrate() の呼び出し側で止めてから行う）
+    """
+    CREATE TABLE messages_new (
+      id                TEXT PRIMARY KEY,
+      session_id        INTEGER NOT NULL REFERENCES sessions(id),
+      seq               INTEGER NOT NULL,
+      author_pseudo_id  TEXT,
+      text              TEXT,
+      sent_at           TEXT NOT NULL,
+      reply_parent_id   TEXT,
+      rule_flags        TEXT,
+      judge_status      TEXT NOT NULL CHECK (judge_status IN ('pending', 'done', 'error', 'skipped')),
+      rule_notified     INTEGER NOT NULL DEFAULT 0,
+      kept_as_context   INTEGER NOT NULL DEFAULT 0,
+      scrubbed_at       TEXT,
+      UNIQUE (session_id, seq)
+    );
+    INSERT INTO messages_new
+      (id, session_id, seq, author_pseudo_id, text, sent_at, reply_parent_id, rule_flags,
+       judge_status, rule_notified, kept_as_context, scrubbed_at)
+      SELECT id, session_id, seq, author_pseudo_id, text, sent_at, reply_parent_id, rule_flags,
+             judge_status, rule_notified, kept_as_context, scrubbed_at
+      FROM messages;
+    DROP TABLE messages;
+    ALTER TABLE messages_new RENAME TO messages;
+    CREATE INDEX idx_messages_session_status ON messages(session_id, judge_status);
+    CREATE INDEX idx_messages_sent_at ON messages(sent_at);
+
+    -- 判定対象の抽出の記録（1セッション1行）。π の1段目 = sample_size / population_size
+    CREATE TABLE judge_subsamples (
+      session_id      INTEGER PRIMARY KEY REFERENCES sessions(id),
+      population_size INTEGER NOT NULL,
+      sample_size     INTEGER NOT NULL,
+      drawn_at        TEXT NOT NULL
+    );
+    """,
 ]
 
 
 def migrate(conn: sqlite3.Connection) -> int:
-    """未適用のマイグレーションを順に適用し、適用後の版を返す。"""
+    """未適用のマイグレーションを順に適用し、適用後の版を返す。
+
+    テーブルを作り直すマイグレーションがあるので、外部キーの強制を止めた接続（PRAGMA foreign_keys = OFF）で呼ぶこと。
+    最後に foreign_key_check で整合性を確かめる。
+    """
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current > len(MIGRATIONS):
         raise RuntimeError(
@@ -116,4 +158,7 @@ def migrate(conn: sqlite3.Connection) -> int:
         )
     for version, script in enumerate(MIGRATIONS[current:], start=current + 1):
         conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
+    problems = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if problems:
+        raise RuntimeError(f"foreign key check failed after migration: {problems[:5]}")
     return len(MIGRATIONS)

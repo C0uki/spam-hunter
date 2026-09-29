@@ -6,6 +6,9 @@
 π（あるメッセージが採点キューに入る確率）は、そのメッセージが「母集団に含まれる」層すべてについて
 π = 1 − Π(1 − n_s / N_s) とする（層ごとの抽出を独立とみなした近似）。
 選ばれなかった層も含めて掛けないと、π を小さく見積もってしまう点に注意。
+
+1セッションのメッセージが判定の上限を超えたときは、先に全体から判定する分をランダムに選ぶ（1段目）。
+そのときの π は、1段目の確率（判定した件数 / 全件数）× 上の式（2段目）になる。
 """
 
 from __future__ import annotations
@@ -118,7 +121,7 @@ def draw_session_samples(
 
 
 def inclusion_probabilities(db: Database, session_id: int, variant: str) -> dict[str, float]:
-    """採点キューに入ったメッセージそれぞれの π。母集団に含まれる層すべてから計算する。"""
+    """採点キューに入ったメッセージそれぞれの π。1段目の確率 × 母集団に含まれる層すべてから計算した2段目の確率。"""
     draws = db.conn.execute(
         "SELECT id, population_size, draw_size, definition FROM sample_draws WHERE session_id = ? AND variant = ?",
         (session_id, variant),
@@ -134,11 +137,49 @@ def inclusion_probabilities(db: Database, session_id: int, variant: str) -> dict
         )
     ]
     values = _values_by_message(db.session_judgments(session_id, variant))
+    phase1 = first_phase_probability(db, session_id)
     result = {}
     for mid in queued:
         miss = 1.0
         for d in draws:
             if d["population_size"] and in_population(json.loads(d["definition"]), values.get(mid, {})):
                 miss *= 1.0 - d["draw_size"] / d["population_size"]
-        result[mid] = 1.0 - miss
+        result[mid] = phase1 * (1.0 - miss)
     return result
+
+
+def subsample_for_judging(
+    db: Database,
+    session_id: int,
+    max_messages: int | None,
+    *,
+    rng: random.Random | None = None,
+) -> tuple[int, int]:
+    """判定する分を選ぶ（1段目の抽出）。(全件数, 判定する件数) を返す。
+
+    - すでに選んであれば、その結果を返す（一時停止から再開しても選び直さない）。
+    - 上限なし（None）や上限以下なら、全件を判定する。
+    - 上限の導入前に判定を始めていたセッション（pending 以外がある）は、全件を判定する扱いにする。
+    """
+    existing = db.get_subsample(session_id)
+    if existing is not None:
+        return existing["population_size"], existing["sample_size"]
+    rows = db.session_message_statuses(session_id)
+    population = len(rows)
+    started = any(r["judge_status"] != "pending" for r in rows)
+    if max_messages is None or population <= max_messages or started:
+        db.save_subsample(session_id, population, population, [])
+        return population, population
+    rng = rng or random.SystemRandom()
+    ids = [r["id"] for r in rows]
+    chosen = set(rng.sample(ids, max_messages))
+    db.save_subsample(session_id, population, max_messages, [mid for mid in ids if mid not in chosen])
+    return population, max_messages
+
+
+def first_phase_probability(db: Database, session_id: int) -> float:
+    """1段目（判定する分を選んだとき）の確率。選んでいなければ1。"""
+    row = db.get_subsample(session_id)
+    if row is None or row["population_size"] == 0:
+        return 1.0
+    return row["sample_size"] / row["population_size"]

@@ -16,7 +16,10 @@ notify:                      # §4.9
 
 judge:                       # §4.5（M2 の測定では、CPU ではバッチ1が最速だった）
   batch_size: 1
-  threads: 2
+  threads: auto              # auto = CPU の論理スレッド数（Surface Go 2 では4。2 のときの約2倍速かった）
+  # 1セッションで判定する件数の上限（Q20）。超えたら、ランダムに選んだ分だけ判定する（推定は重みで補正する）。
+  # Surface Go 2 で1件約5.2秒 → 5,000件で約7時間（一晩で終わる量）。空にすると上限なし
+  max_messages_per_session: 5000
 
 sampling:                    # §4.6 層別抽出（1セッションあたりの件数）
   random: 30

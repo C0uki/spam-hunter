@@ -87,6 +87,8 @@ python -m app.cli judge                     # 判定だけを行う（抽出と�
 - 初回は Laya の多言語用モデル（約650MB）をダウンロードします。
 - 1回目の Ctrl+C で、いまのバッチを終えてから止まります。もう一度 `pipeline` を実行すると、続きから進みます。
 - 抽出の件数、通知の設定、ルールの値などの初期値は `config/defaults.yaml` にあります。
+- **1セッションで判定するのは最大5,000件**です（Surface Go 2 で約7時間、一晩で終わる量）。超えた分はランダムに選んだ5,000件だけを判定し、統計では選ばれた確率で補正します。変えるときは `defaults.yaml` の `judge.max_messages_per_session` を書き換えます。
+- 判定に使うスレッド数は、既定で CPU に合わせて自動で決まります（Surface Go 2 では4）。
 - 質問の文言と variant は `config/questions.yaml` で変えられます。評価期間中は、本番の variant（`primary`）を変えないでください。
 
 ### ONNX 版を使う・比べる
@@ -98,7 +100,8 @@ python scripts/export_onnx.py      # backend/models/ に fp32 版と INT8 版を
 ### 処理速度を測る
 
 ```bash
-python scripts/bench.py                                        # torch と onnx-int8、バッチ 1/4/8、2スレッド
+python scripts/bench.py                                        # torch と onnx-int8、バッチ 1/4/8、CPU のスレッド数
+python scripts/bench.py --backends torch --batch-sizes 1 --rounds 1 --messages 20   # 手早く測る（Surface で数分）
 python scripts/bench.py --backends torch onnx onnx-int8 --json bench.json
 ```
 

@@ -4,7 +4,7 @@
 PyTorch 版以外のバックエンドについては、PyTorch 版との判定の差（P(true) の差、判定が変わった件数）も出す。
 
 使い方（backend/ で）:
-    python scripts/bench.py                                   # torch と onnx-int8、バッチ 1/4/8、2スレッド
+    python scripts/bench.py                                   # torch と onnx-int8、バッチ 1/4/8、CPU のスレッド数
     python scripts/bench.py --backends torch onnx onnx-int8 --batch-sizes 1 4 8 16 --rounds 3
     python scripts/bench.py --json bench-result.json
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import os
 import platform
 import statistics
 import sys
@@ -116,7 +117,9 @@ def main() -> None:
     parser.add_argument("--batch-sizes", nargs="+", type=int, default=[1, 4, 8])
     parser.add_argument("--messages", type=int, default=40, help="1回の測定で判定する件数")
     parser.add_argument("--rounds", type=int, default=3, help="測定の回数（中央値を使う）")
-    parser.add_argument("--threads", type=int, default=2)
+    parser.add_argument(
+        "--threads", type=int, default=os.cpu_count() or 2, help="既定は CPU の論理スレッド数（判定の既定と同じ）"
+    )
     parser.add_argument("--variant", default=None, help="質問を取る variant（省略時は primary）")
     parser.add_argument("--json", type=Path, default=None, help="結果を JSON で保存する")
     args = parser.parse_args()

@@ -116,6 +116,7 @@ def summary_embed(summary: dict[str, Any]) -> dict:
         ("ルールの印", summary.get("rule_flagged")),
         ("判定した件数", summary.get("judged")),
         ("判定の失敗", summary.get("judge_errors")),
+        ("判定しなかった件数（上限）", summary.get("judge_skipped") or None),
         ("採点キュー", summary.get("queued")),
         ("しきい値を超えた件数", summary.get("over_threshold")),
     ]

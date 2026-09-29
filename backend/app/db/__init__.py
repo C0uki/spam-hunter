@@ -46,10 +46,12 @@ class Database:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(path))
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.execute("PRAGMA synchronous = NORMAL")
+        # テーブルを作り直すマイグレーションのため、外部キーの強制は移行が終わってから有効にする
+        self.conn.execute("PRAGMA foreign_keys = OFF")
         migrate(self.conn)
+        self.conn.execute("PRAGMA foreign_keys = ON")
 
     def close(self) -> None:
         self.conn.close()
@@ -324,7 +326,8 @@ class Database:
             "SELECT COUNT(*) AS received,"
             " SUM(rule_flags IS NOT NULL) AS rule_flagged,"
             " SUM(judge_status = 'done') AS judged,"
-            " SUM(judge_status = 'error') AS judge_errors"
+            " SUM(judge_status = 'error') AS judge_errors,"
+            " SUM(judge_status = 'skipped') AS judge_skipped"
             " FROM messages WHERE session_id = ?",
             (session_id,),
         ).fetchone()
@@ -338,5 +341,30 @@ class Database:
             "rule_flagged": row["rule_flagged"] or 0,
             "judged": row["judged"] or 0,
             "judge_errors": row["judge_errors"] or 0,
+            "judge_skipped": row["judge_skipped"] or 0,
             "queued": queued,
         }
+
+    # --- 判定対象の抽出（1セッションで判定する件数の上限） ------------------------------
+
+    def get_subsample(self, session_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM judge_subsamples WHERE session_id = ?", (session_id,)
+        ).fetchone()
+
+    def session_message_statuses(self, session_id: int) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            "SELECT id, judge_status FROM messages WHERE session_id = ? ORDER BY seq", (session_id,)
+        ).fetchall()
+
+    def save_subsample(self, session_id: int, population_size: int, sample_size: int, skipped_ids: list[str]) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO judge_subsamples (session_id, population_size, sample_size, drawn_at)"
+                " VALUES (?, ?, ?, ?)",
+                (session_id, population_size, sample_size, iso(utcnow())),
+            )
+            self.conn.executemany(
+                "UPDATE messages SET judge_status = 'skipped' WHERE id = ? AND judge_status = 'pending'",
+                [(mid,) for mid in skipped_ids],
+            )
